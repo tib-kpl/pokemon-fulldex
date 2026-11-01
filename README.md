@@ -3,7 +3,7 @@
 > [!NOTE]
 > **About this fork: French ROM support**
 >
-> This is a fork of [mamesj/pokemon-ds-widescreen](https://github.com/mamesj/pokemon-ds-widescreen),
+> This is a fork of [mamesj/pokemon-fulldex](https://github.com/mamesj/pokemon-fulldex),
 > adding support for **French revision 0 ROMs** of the same seven games supported upstream:
 > Black, White, Black 2, White 2, HeartGold, SoulSilver and Platinum.
 > Credit for the original project goes to its upstream authors.
