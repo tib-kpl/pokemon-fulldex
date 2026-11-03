@@ -37,8 +37,8 @@ jobs:
             build-decomp-pokebw2
             build-decomp-pokew2
             build-decomp-aletheia
-          key: android-deps-v1-${{ hashFiles('tools/android/build_all.sh') }}
-          restore-keys: android-deps-v1-
+          key: android-deps-v2-${{ hashFiles('tools/android/build_all.sh') }}
+          restore-keys: android-deps-v2-
       - name: Test
         run: python3 -m unittest discover -s tests -v
       - name: Signing key
