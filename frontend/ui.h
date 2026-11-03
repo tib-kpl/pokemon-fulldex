@@ -7,7 +7,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "i18n.h"
+
+#include "ui_text.h"
 
 struct Canvas
 {
@@ -110,72 +111,29 @@ struct Canvas
             { 0x00, 0x1F, 0x11, 0x11, 0x11, 0x1F, 0x00 },
             { 0x00, 0x04, 0x0A, 0x0A, 0x11, 0x1F, 0x00 },
             { 0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03 }, // % (VOLUME)
-            { 0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00 }, // ' (translations)
-            { 0x00, 0x00, 0x00, 0x00, 0x06, 0x04, 0x08 }, // ,
-            { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04 }, // ?
         };
+        if (c == '\'') { static const uint8_t apostrophe[] = { 4, 4, 8, 0, 0, 0, 0 }; return apostrophe; }
         if (c >= 'a' && c <= 'z') c -= 32;
         if (c >= 'A' && c <= 'Z') return font[c - 'A'];
         if (c >= '0' && c <= '9') return font[26 + c - '0'];
-        static const char punct[] = ":-+./<>!()\x01\x02\x03\x04%',?";
+        static const char punct[] = ":-+./<>!()\x01\x02\x03\x04%";
         const char* p = c ? strchr(punct, c) : nullptr;
         return p ? font[36 + (p - punct)] : nullptr;
     }
 
-    // The width of s as drawn: in the chosen language (i18n.h), so every text is translated
-    // here and in Text, whoever draws it.
-    static int TextWidth(const std::string& s, int scale) { return (int)i18n::Tr(s).size() * 6 * scale; }
-
-    // The largest scale, at most `scale` and at least 1, at which the text is no wider than maxW:
-    // a translation is often longer than the English it replaces (the hints at the foot of a page).
-    static int FitScale(const std::string& s, int scale, int maxW)
+    // (In the interface's language, UiLang: its UTF-8 letters are one character each.)
+    static int TextWidth(const std::string& s, int scale)
     {
-        while (scale > 1 && TextWidth(s, scale) > maxW) scale--;
-        return scale;
+        return UiLang::Units(UiLang::Tr(s)) * scale;
     }
 
-    void Text(int x, int y, const std::string& text, int scale, uint32_t argb)
+    static int TextWidthRaw(const std::string& text,int scale) { return UiLang::Units(text)*scale; }
+    void TextRaw(int x,int y,const std::string& text,int scale,uint32_t argb) { UiText::DrawRaw(*this,x,y,text,scale,argb); }
+    void Text(int x,int y,const std::string& text,int scale,uint32_t argb)
     {
-        for (char c : i18n::Tr(text))
-        {
-            // Accented capitals (i18n.h, the codes  and up): the whole letter, and the accent
-            // above the line (or the cedilla below it) in a few pixels with a row's gap, as the
-            // É of POKÉMON.
-            char accent = 0;
-            switch (c)
-            {
-            case i18n::ACUTE_E: c = 'E'; accent = '/'; break;
-            case i18n::GRAVE_E: c = 'E'; accent = '`'; break;
-            case i18n::CIRC_E: c = 'E'; accent = '^'; break;
-            case i18n::DIAER_E: c = 'E'; accent = '"'; break;
-            case i18n::GRAVE_A: c = 'A'; accent = '`'; break;
-            case i18n::CIRC_A: c = 'A'; accent = '^'; break;
-            case i18n::CEDILLA_C: c = 'C'; accent = ','; break;
-            case i18n::CIRC_I: c = 'I'; accent = '^'; break;
-            case i18n::DIAER_I: c = 'I'; accent = '"'; break;
-            case i18n::CIRC_O: c = 'O'; accent = '^'; break;
-            case i18n::GRAVE_U: c = 'U'; accent = '`'; break;
-            case i18n::CIRC_U: c = 'U'; accent = '^'; break;
-            case i18n::DIAER_U: c = 'U'; accent = '"'; break;
-            default: break;
-            }
-            switch (accent)
-            {
-            case '/': Fill(x + 3 * scale, y - 3 * scale, scale, scale, argb); Fill(x + 2 * scale, y - 2 * scale, scale, scale, argb); break;
-            case '`': Fill(x + 1 * scale, y - 3 * scale, scale, scale, argb); Fill(x + 2 * scale, y - 2 * scale, scale, scale, argb); break;
-            case '^': Fill(x + 2 * scale, y - 3 * scale, scale, scale, argb); Fill(x + 1 * scale, y - 2 * scale, scale, scale, argb); Fill(x + 3 * scale, y - 2 * scale, scale, scale, argb); break;
-            case '"': Fill(x + 1 * scale, y - 2 * scale, scale, scale, argb); Fill(x + 3 * scale, y - 2 * scale, scale, scale, argb); break;
-            case ',': Fill(x + 2 * scale, y + 7 * scale, scale, scale, argb); Fill(x + 1 * scale, y + 8 * scale, scale, scale, argb); break;
-            default: break;
-            }
-            if (const uint8_t* g = Glyph(c))
-                for (int row = 0; row < 7; row++)
-                    for (int col = 0; col < 5; col++)
-                        if (g[row] & (0x10 >> col))
-                            Fill(x + col * scale, y + row * scale, scale, scale, argb);
-            x += 6 * scale;
-        }
+        UiText::Draw(*this,x,y,text,scale,argb);
     }
+
 };
 
 // The accent colours of COLOUR (the game list's settings, GAME LIST): the game list's lines and
@@ -265,7 +223,9 @@ struct Menu
     // The chosen row's colour (COLOUR, AccentNamed); the box, text and bars are shaded from it.
     static inline uint32_t Accent = 0xFFE0242C;
 
-    void Draw(Canvas& c, const std::string& title, const std::string& hint, const std::string& note = "") const
+    // boxUnits: the box's width at scale 1 (0: 190, as the other pages). CHEATS passes 260 so a
+    // code's name (32 letters) fits beside "< OFF >".
+    void Draw(Canvas& c, const std::string& title, const std::string& hint, const std::string& note = "", int boxUnits = 0) const
     {
         // (Each channel of the accent c: f(c) per part. With blue, 0xFF3D6FD1, it is the menu as
         // it was: the box 0x1C2A44, the text 0xC8D0E0, the hints 0x8FA0C0.)
@@ -279,56 +239,38 @@ struct Menu
         const uint32_t hintCol = shade(Accent, [](int v) { return 110 + v * 35 / 100; });
         const uint32_t barOffSel = shade(Accent, [](int v) { return v + (255 - v) * 3 / 10; });
         const uint32_t barOff = shade(Accent, [](int v) { return v / 2; });
-        int scale = c.h / 240;
+        int scale = std::min(c.w, c.h) / 240;
         if (scale < 1) scale = 1;
-        int lineH = 11 * scale;
+        int lineH = (UiLang::Tall() ? 16 : 11) * scale;
         // (Rows closer together if they would not all fit on the screen, down to 9 * scale.)
         // With no title the box starts with the first item.
         const bool hasTitle = !title.empty();
         // (As many rows as fit at the smallest spacing; the rest scroll into view.)
-        const int fit = std::max(1, (c.h - 4 - 6 * scale) / (9 * scale) - (hasTitle ? 3 : 2));
+        const int fit = std::max(1, (c.h - 4 - 6 * scale) / ((UiLang::Tall() ? 14 : 9) * scale) - (hasTitle ? 3 : 2));
         const int shown = std::min((int)items.size(), fit);
         if (selected < scroll) scroll = selected;
         if (selected >= scroll + shown) scroll = selected - shown + 1;
         scroll = std::max(0, std::min(scroll, (int)items.size() - shown));
         const int rows = shown + (hasTitle ? 3 : 2);
-        if (lineH * rows + 6 * scale > c.h - 4) lineH = std::max(9 * scale, (c.h - 4 - 6 * scale) / rows);
-        int boxW = 190 * scale;
-        // Wide enough for the longest row (a translation's name and value side by side) and title.
-        {
-            int need = hasTitle ? Canvas::TextWidth(title, scale) + 12 * scale : 0;
-            for (const MenuItem& it : items)
-            {
-                int w = 12 * scale + Canvas::TextWidth(it.label, scale);
-                if (!it.value.empty())
-                    w += 12 * scale + (it.slider >= 0 ? Canvas::TextWidth("< 100% >", scale) + 54 * scale
-                                                      : Canvas::TextWidth(it.info ? it.value : "< " + i18n::Tr(it.value) + " >", scale));
-                need = std::max(need, w);
-            }
-            boxW = std::max(boxW, need);
-        }
+        if (lineH * rows + 6 * scale > c.h - 4) lineH = std::max(UiLang::LineUnits() * scale, (c.h - 4 - 6 * scale) / rows);
+        // (A value as drawn: translated before its arrows go round it, as the whole would not be
+        // in the language's table.)
+        auto shownValue = [](const MenuItem& item) { return item.info ? item.value : "< " + UiLang::Tr(item.value) + " >"; };
+        int boxW = (boxUnits > 0 ? boxUnits : 190) * scale;
+        if (UiLang::lang)
+            for (const auto& item : items)
+                boxW = std::max(boxW, Canvas::TextWidth(item.label, scale) + (item.value.empty() ? 0 : Canvas::TextWidth(shownValue(item), scale)) + 20 * scale);
         if (boxW > c.w - 8) boxW = c.w - 8;
         int boxH = lineH * rows + 6 * scale;
         // The note's lines (up to 4, the last cut short), and the box moved up to make room.
         std::vector<std::string> noteLines;
         if (!note.empty())
         {
-            std::string line, word;
             const int maxW = boxW - 12 * scale;
-            auto push = [&](const std::string& w) {
-                const std::string t = line.empty() ? w : line + " " + w;
-                if (!line.empty() && Canvas::TextWidth(t, scale) > maxW) { noteLines.push_back(line); line = w; }
-                else line = t;
-            };
-            for (char ch : note + " ")
-            {
-                if (ch == ' ') { if (!word.empty()) push(word); word.clear(); }
-                else word += ch;
-            }
-            if (!line.empty()) noteLines.push_back(line);
-            if (noteLines.size() > 4) { noteLines.resize(4); noteLines[3] += "..."; }
+            noteLines = UiLang::Wrap(UiLang::Tr(note), maxW / scale);
+            if (noteLines.size() > 4) { noteLines.resize(4); noteLines[3] = UiLang::Elide(noteLines[3]+"...",maxW/scale); }
         }
-        const int noteH = noteLines.empty() ? 0 : (int)noteLines.size() * 9 * scale + 6 * scale;
+        const int noteH = noteLines.empty() ? 0 : (int)noteLines.size() * UiLang::LineUnits() * scale + 6 * scale;
         int bx = (c.w - boxW) / 2, by = std::max(2, (c.h - boxH - noteH) / 2);
         // (Kept for ItemAt: where the rows were drawn.)
         drawnX = bx;
@@ -355,7 +297,7 @@ struct Menu
             c.Text(bx + 6 * scale, y, items[i].label, scale, col);
             if (!items[i].value.empty())
             {
-                std::string v = items[i].info ? items[i].value : "< " + i18n::Tr(items[i].value) + " >";
+                const std::string v = shownValue(items[i]);
                 // (A slider's value right-aligned in room for its widest, "< 100% >", the bar left
                 // of it, so the bar stays put as the number changes.)
                 const int vx = bx + boxW - 6 * scale - Canvas::TextWidth(items[i].slider >= 0 ? "< 100% >" : v, scale);
@@ -371,17 +313,14 @@ struct Menu
             }
             y += lineH;
         }
-        {
-            const int hs = Canvas::FitScale(hint, scale, std::max(boxW - 12 * scale, 80 * scale));
-            c.Text((c.w - Canvas::TextWidth(hint, hs)) / 2, y + 4 * scale + (scale - hs) * 3, hint, hs, hintCol);
-        }
+        c.Text(bx + (boxW - Canvas::TextWidth(hint, scale)) / 2, y + 4 * scale, hint, scale, hintCol);
         if (!noteLines.empty())
         {
             const int ny = by + boxH + 3 * scale;
             c.Fill(bx - scale, ny - scale, boxW + 2 * scale, noteH + 2 * scale, 0xFFE8E8E8);
             c.Fill(bx, ny, boxW, noteH, noteBox);
             for (size_t i = 0; i < noteLines.size(); i++)
-                c.Text(bx + 6 * scale, ny + 4 * scale + (int)i * 9 * scale, noteLines[i], scale, textCol);
+                c.TextRaw(bx + 6 * scale, ny + 4 * scale + (int)i * UiLang::LineUnits() * scale, noteLines[i], scale, textCol);
         }
     }
 };

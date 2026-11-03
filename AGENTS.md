@@ -48,7 +48,6 @@ Targets: Linux and Windows first, Android second. macOS is community-maintained.
 | `frontend/merged.h`, `layout.h` | choosing and composing the single-screen view |
 | `frontend/battlewide.h` | the widescreen battle view (continues backgrounds and moves sprites beside the screen) |
 | `frontend/gpucompose.h` | the same picture as `MergedCompose` in `merged.h`, drawn by the GPU (headless tests use the CPU one; keep both in step) |
-| `frontend/i18n.h`, `lang/*.json`, `tools/i18n_check.py` | translations of the menus: `lang/en.json` lists every text with an id, `lang/xx.json` has the same ids translated; the code keeps the English wording (found in `en.json`) and `Canvas::Text` / `TextWidth` translate it; embedded by CMake; chosen by the `language` setting; run the check after changing a menu text |
 | `frontend/ui.h`, `touchpad.h` | pause menu, touch cursor and messages; on-screen controls for Android |
 | `frontend/platform.cpp`, `host.h` | melonDS's Platform interface (files, saves, threads) |
 | `melonDS/` | melonDS 1.1 with this project's changes (dispatch into recompiled code, per-pixel layer flags, `GPU3D_Wide.cpp`, palette and blend snapshots for the widescreen view) |
@@ -64,6 +63,8 @@ Targets: Linux and Windows first, Android second. macOS is community-maintained.
 | `melonDS/src/GPU3D_WideGpu*.cpp`, `wide_gpu/` | the widescreen world drawn by a graphics chip: deko3D on the Switch, OpenGL on a PC for headless comparisons (keep both in step with `GPU3D_Wide.cpp`) |
 | `frontend/pc_launcher.cpp`, `tools/pc/` | the PC all-games download (Windows and Linux, `SSR_PC_ALL_GAMES`): the game list (launcher.h) when started without arguments, ROMs in `roms/`, saves in `saves/`, function tables in `data/funcs/`; `tools/pc/build_all.sh` builds and packs it (Windows with MinGW-w64 from Linux or WSL) |
 | `tools/switch/` | Switch builds: `build_game.sh` (any of the games; `bw`: the shared Black 2/White 2 build with its tables in the romfs; `all`: one program for all seven with the game list), `build.sh` (SoulSilver) |
+| `tools/port_version.py`, `tools/shift_table.py`, `tools/versions/`, `frontend/gamecode.h` | other languages (Spanish White, Platinum, SoulSilver, HeartGold): where their functions are, as shifts from the English version's (`tools/versions/<code>.txt` for the function tables, `tools/soulsilver/<name>.json` for SoulSilver's), found once by matching both ROMs; the frontend treats them as the English version (`BaseGameCode`) |
+| `tools/port_family.py`, `tools/platinum/ADAE.txt` | Diamond and Pearl: Platinum's table mapped onto Diamond (another overlay layout, so every module is searched; numpy, all cores); Pearl and Spanish Diamond are shifts from it (`tools/versions`); `platinum.h` runs for them |
 | `layouts/soulsilver-us.json` | section addresses and code/data map, so a plain ROM can be recompiled without the decompilation |
 
 ## Building

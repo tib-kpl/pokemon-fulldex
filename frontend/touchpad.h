@@ -10,6 +10,7 @@
 #include <vector>
 #include <SDL.h>
 #include "ui.h"
+#include "touchlayout.h"
 
 struct TouchPad
 {
@@ -25,6 +26,7 @@ struct TouchPad
         const char* label;
     };
 
+    TouchLayout::Profile profile;
     bool visible = true;
     std::vector<Button> buttons;
     float dpadX = 0, dpadY = 0, dpadR = 0;
@@ -35,9 +37,10 @@ struct TouchPad
     std::map<SDL_FingerID, int> lifted;            // up, frames left to count as held (see Up)
 
     SDL_Texture* labels = nullptr;
+    int labelsLanguage = -1;
     std::map<std::string, SDL_Rect> labelRect;
 
-    void Layout(int outW, int outH)
+    void Layout(int outW, int outH, bool customise = true)
     {
         if (outW == w && outH == h) return;
         w = outW;
@@ -61,6 +64,50 @@ struct TouchPad
             // a controller, where fast forward is the right trigger.
             { FAST, outW - 0.35f * u - 2.6f * u - 0.3f * u - 0.8f * u, 0.3f * u + 0.45f * u, 0, 1.6f * u, 0.9f * u, ">>" },
         };
+        // SELECT and START either side of MENU, off the bottom edge where the games put their
+        // touch screen's buttons (the Pokedex's, the bag's, a battle's), if they fit there
+        // between L and fast forward; on narrower screens (a 4:3 tablet) along the bottom.
+        if (outW / 2.0f + 2.75f * u < outW - 4.95f * u)
+            for (Button& b : buttons)
+                if (b.pad == PAD_BACK || b.pad == PAD_START)
+                {
+                    b.x = outW / 2.0f + (b.pad == PAD_BACK ? -1.85f : 1.85f) * u;
+                    b.y = 0.55f * u;
+                    b.w = 1.8f * u;
+                }
+        if (customise)
+        {
+            const auto controls = profile.Apply(Geometry(), w, h);
+            dpadX = controls[0].x; dpadY = controls[0].y; dpadR = controls[0].rx;
+            for (size_t i = 0; i < buttons.size(); ++i)
+            {
+                auto& b = buttons[i]; const auto& c = controls[i + 1];
+                b.x = c.x; b.y = c.y;
+                if (b.w > 0) { b.w = c.rx * 2; b.h = c.ry * 2; }
+                else b.r = c.rx;
+            }
+        }
+    }
+
+    std::vector<TouchLayout::Control> Geometry() const
+    {
+        std::vector<TouchLayout::Control> out = { { "DPAD", "D-PAD", dpadX, dpadY, dpadR, dpadR, false } };
+        for (const auto& b : buttons)
+            out.push_back({ b.label, b.label, b.x, b.y, b.w > 0 ? b.w / 2 : b.r, b.w > 0 ? b.h / 2 : b.r, b.w == 0 });
+        return out;
+    }
+    static std::vector<TouchLayout::Control> Defaults(int width, int height)
+    {
+        TouchPad pad;
+        pad.Layout(width, height, false);
+        return pad.Geometry();
+    }
+    bool EditLayout(SDL_Renderer* renderer, const std::string& path)
+    {
+        const bool saved = TouchLayout::Edit<Canvas>(renderer, profile, path, Defaults);
+        w = h = 0;
+        fingerOn.clear(); fingerAt.clear(); lifted.clear();
+        return saved;
     }
 
     int HitButton(float x, float y) const
@@ -165,7 +212,9 @@ struct TouchPad
 
     void MakeLabels(SDL_Renderer* r)
     {
-        if (labels) return;
+        if (labels && labelsLanguage == UiLang::lang) return;
+        if (labels) SDL_DestroyTexture(labels);
+        labels=nullptr;labelRect.clear();labelsLanguage=UiLang::lang;
         const char* names[] = { "A", "B", "X", "Y", "L", "R", "SELECT", "START", "MENU", ">>" };
         const int scale = 3;
         Canvas c;
@@ -173,14 +222,16 @@ struct TouchPad
         for (const char* n : names)
         {
             int tw = Canvas::TextWidth(n, scale);
-            labelRect[n] = { x, 0, tw, 7 * scale };
+            const auto text=UiLang::Tr(n);int height=7;
+            for(size_t at=0;at<text.size();) {auto code=UiLang::Next(text,at);if(code>=0x1100)height=14;else if(code>=128)height=std::max(height,10);}
+            labelRect[n] = { x, 0, tw, height * scale };
             x += tw + 2;
         }
-        c.Resize(x, 7 * scale);
+        c.Resize(x, 14 * scale);
         x = 0;
         for (const char* n : names)
         {
-            c.Text(labelRect[n].x, 0, n, scale, 0xFFFFFFFF);
+            c.Text(labelRect[n].x, labelRect[n].h > 7*scale ? 3*scale : 0, n, scale, 0xFFFFFFFF);
         }
         labels = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, c.w, c.h);
         SDL_UpdateTexture(labels, nullptr, c.px.data(), c.w * 4);

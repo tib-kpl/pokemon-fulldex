@@ -4,10 +4,11 @@
 # (frontend/pc_launcher.cpp). The first time it starts, the player picks the folder with their
 # ROMs (Android's folder picker); the saves go in a saves folder inside it.
 #
-#   tools/android/build_all.sh
+#   tools/android/build_all.sh your-soulsilver-us.nds
 #
-# Public layouts and decompilation symbols supply addresses only. No ROM is
-# needed to build this APK; games are read from the player's storage at runtime.
+# As for the PC and Switch all-games downloads, the SoulSilver ROM is only read for the
+# addresses in SoulSilver and HeartGold's tables, and the Black games' function tables come from
+# the decompilations' symbol files: the APK holds nothing of the games.
 #
 # The result: build-android-dist/pokemon-ds-wide-android.apk, for arm64-v8a (phones, tablets and
 # handhelds) and x86_64 (the Android emulator on a PC). SSR_ANDROID_ABIS="arm64-v8a" makes a
@@ -28,8 +29,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$HERE"
+ROM="${1:-}"
 SDK="${ANDROID_SDK:-$HOME/android-sdk}"
-NDK="${ANDROID_NDK_HOME:-$SDK/ndk/27.2.12479018}"
+NDK="$SDK/ndk/27.2.12479018"
 BT="$SDK/build-tools/34.0.0"
 JAR="$SDK/platforms/android-34/android.jar"
 ABIS="${SSR_ANDROID_ABIS:-arm64-v8a x86_64}"
@@ -49,8 +51,11 @@ PLATFORM=android-24   # Android 7.0 and later
 say() { printf '\n== %s\n' "$*"; }
 fail() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
-# All-game builds run the ROM through the JIT: only public address metadata
-# is needed at build time. The optional old ROM argument is no longer read.
+[ -n "$ROM" ] || fail "give your SoulSilver ROM (US): tools/android/build_all.sh your-soulsilver-us.nds"
+[ -f "$ROM" ] || fail "no such file: $ROM"
+[ "$(dd if="$ROM" bs=1 skip=12 count=4 2>/dev/null)" = IPGE ] ||
+    fail "$ROM is not Pokemon SoulSilver (US, game code IPGE): the tables are made from it"
+ROM="$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")"
 for tool in git cmake ninja python3 curl zip javac; do
     command -v "$tool" >/dev/null || fail "$tool is not installed (Ubuntu: sudo apt install git cmake ninja-build python3 curl zip openjdk-17-jdk-headless)"
 done
@@ -77,8 +82,12 @@ fetch_symbols() { # dir url commit paths...
 
 # SoulSilver and HeartGold's tables (addresses only) and the function tables, as for the PC
 # download (tools/pc/build_all.sh).
-python3 tools/soulsilver/layout_tables.py layouts/soulsilver-us.json build-layout-tables
-python3 tools/soulsilver/tables_only.py build-layout-tables build-gen-tables
+if [ ! -f gen/sources.cmake ]; then
+    say "SoulSilver's tables, from $ROM"
+    python3 tools/recomp.py --rom "$ROM" --layout layouts/soulsilver-us.json melonDS/src gen
+    python3 tools/apps.py --layout layouts/soulsilver-us.json gen
+fi
+python3 tools/soulsilver/tables_only.py gen build-gen-tables
 FUNCS="$HERE/build-android-data/funcs"
 rm -rf "$FUNCS"
 mkdir -p "$FUNCS"
@@ -93,7 +102,11 @@ python3 tools/bw2/funcmap.py build-decomp-pokew2/config/w2_us/arm9 - "$FUNCS/IRD
 python3 tools/bw1/funcmap.py build-decomp-aletheia/layout/function_addrs.tsv - "$FUNCS/IRBO.txt"
 python3 tools/bw1/funcmap.py build-decomp-aletheia/layout/function_addrs.tsv - "$FUNCS/IRAO.txt" --white
 cp tools/platinum/CPUE.txt "$FUNCS/CPUE.txt"
-cp tools/regions/{IREF,IRDF,CPUF,IRBF,IRAF}.txt "$FUNCS/"
+cp tools/platinum/ADAE.txt "$FUNCS/ADAE.txt" # Diamond: Platinum's names (tools/port_family.py)
+# The other languages' tables (tools/versions: Spanish White, Platinum, ...), from the English ones.
+python3 tools/shift_table.py --all "$FUNCS"
+cp tools/regions/*.txt "$FUNCS/"
+python3 tools/regions/package_profiles.py --funcs "$FUNCS" --portable "$HERE/build-gen-tables/rc_portable.cpp"
 
 DEPS="$HERE/build-android-deps"
 if [ ! -f "$DEPS/$SDL_NAME/CMakeLists.txt" ]; then
@@ -109,22 +122,22 @@ STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 FILES=()
 for abi in $ABIS; do
     ARGS=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
-          -DANDROID_ABI="$abi" -DANDROID_PLATFORM="$PLATFORM")
+          -DANDROID_ABI="$abi" -DANDROID_PLATFORM="$PLATFORM" -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON
+          -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
     SDL_PREFIX="$DEPS/sdl2-$abi"
-    if [ ! -f "$SDL_PREFIX/lib/libSDL2.so" ]; then
-        say "SDL2 for Android ($abi)"
-        cmake -S "$DEPS/$SDL_NAME" -B "$DEPS/build-sdl2-$abi" "${ARGS[@]}" -DCMAKE_INSTALL_PREFIX="$SDL_PREFIX" \
+    # Reconfigure cached SDL builds too: older cached libraries can still be 4 KB aligned.
+    say "SDL2 for Android ($abi)"
+    cmake -S "$DEPS/$SDL_NAME" -B "$DEPS/build-sdl2-$abi" "${ARGS[@]}" -DCMAKE_INSTALL_PREFIX="$SDL_PREFIX" \
             -DSDL_STATIC=OFF -DSDL_TEST=OFF >/dev/null
-        ninja -C "$DEPS/build-sdl2-$abi" install >/dev/null
-    fi
+    ninja -C "$DEPS/build-sdl2-$abi" install >/dev/null
     say "Compiling for Android ($abi)"
     # The JIT for every game, no libpng (screenshots are for tests), the world drawn by the CPU
     # (the graphics-chip version is OpenGL, Android has OpenGL ES), and on x86_64 SSE rather than
     # the building machine's AVX2.
     cmake -S . -B "build-android-all-$abi" "${ARGS[@]}" -DSDL2_DIR="$SDL_PREFIX/lib/cmake/SDL2" \
         -DSSR_JIT=ON -DSSR_PC_ALL_GAMES=ON -DSSR_PNG=OFF -DSSR_GPU3D=OFF -DSSR_PORTABLE_X86=ON \
-        -DSSR_GENERATED_DIR="$HERE/build-gen-tables" -DSSR_PC_ART="$ART" -DSSR_GBA_DIR="${SSR_GBA_DIR:-}" -DSSR_VERSION="${SSR_VERSION:-}" -DSSR_UPDATE_REPOSITORY="${SSR_UPDATE_REPOSITORY:-tib-kpl/pokemon-fulldex}" >/dev/null
-    ninja -C "build-android-all-$abi" -j "${SSR_BUILD_JOBS:-2}" ssrecomp
+        -DSSR_GENERATED_DIR="$HERE/build-gen-tables" -DSSR_PC_ART="$ART" -DSSR_GBA_DIR="${SSR_GBA_DIR:-}" >/dev/null
+    ninja -C "build-android-all-$abi" ssrecomp
     mkdir -p "build-android-dist/lib/$abi"
     "$STRIP" -o "build-android-dist/lib/$abi/libmain.so" "build-android-all-$abi/libmain.so"
     "$STRIP" -o "build-android-dist/lib/$abi/libSDL2.so" "$SDL_PREFIX/lib/libSDL2.so"
@@ -133,6 +146,7 @@ done
 for f in "$FUNCS"/*.txt; do FILES+=("assets/funcs/$(basename "$f")=$f"); done
 # The licences: this program's (GPL-3) and, with the GBA games built in, mGBA's (MPL-2.0).
 FILES+=("assets/LICENSE.txt=$HERE/LICENSE")
+FILES+=("assets/LICENSE-Noto.txt=$HERE/LICENSE-Noto.txt")
 GBA_WORK="${GBAW_WORK:-$HOME/pokemon-gba-wide}"
 if [ -n "${SSR_GBA_DIR:-}" ]; then
     [ -f "$GBA_WORK/mgba/LICENSE" ] || fail "no mGBA in $GBA_WORK (Pokemon GBA Widescreen's setup.sh makes it; GBAW_WORK if elsewhere)"
@@ -143,6 +157,9 @@ say "The app around it: manifest, icon, SDL's Java code and the app's own"
 W="$HERE/build-android-dist/skeleton"
 rm -rf "$W"
 mkdir -p "$W/classes" "$W/dex"
+BUILD_EPOCH="$(date +%s)"
+printf '%s\n' "$BUILD_EPOCH" > "$HERE/build-android-dist/fulldex-build-id.txt"
+printf 'package io.github.mamesj.pokemonds; final class BuildInfo { static final long BUILT_AT = %s000L; }\n' "$BUILD_EPOCH" > "$W/BuildInfo.java"
 # The icon: the picture as it is for Android 7 and older, and an adaptive icon for Android 8 on
 # (mipmap-anydpi-v26), whose launchers cut it to their own shape (a circle on a Pixel). Without
 # one, the square picture was shrunk inside a white circle. Its one layer is the picture at 70% of
@@ -188,10 +205,9 @@ cat > "$W/res/mipmap-anydpi-v26/ic_launcher.xml" <<'XML'
 XML
 "$BT/aapt2" compile --dir "$W/res" -o "$W/res.zip"
 "$BT/aapt2" link -o "$W/base.apk" -I "$JAR" --manifest tools/android/allgames/AndroidManifest.xml \
-    --replace-version --version-name "${SSR_VERSION:-0.2.0}" --version-code "${SSR_VERSION_CODE:-20000}" \
     --min-sdk-version 24 --target-sdk-version 34 "$W/res.zip"
 javac -nowarn --release 11 -cp "$JAR" -d "$W/classes" \
-    $(find "$DEPS/$SDL_NAME/android-project/app/src/main/java" tools/android/allgames/java -name '*.java') 2>&1
+    "$W/BuildInfo.java" $(find "$DEPS/$SDL_NAME/android-project/app/src/main/java" tools/android/allgames/java -name '*.java') 2>&1
 [ -f "$W/classes/io/github/mamesj/pokemonds/GameActivity.class" ] || fail "the app's Java code did not compile"
 "$BT/d8" --release --min-api 24 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class')
 (cd "$W/dex" && zip -q -X "$W/base.apk" classes.dex)
@@ -209,20 +225,14 @@ PY
 # Only the app's own files may be in it: never a ROM, save or game code.
 python3 - "$APK" <<'PY'
 import re, sys, zipfile
-ok = re.compile(r'^(AndroidManifest\.xml|resources\.arsc|classes\.dex|res/.*\.png|res/mipmap-anydpi-v26/ic_launcher\.xml|lib/(arm64-v8a|x86_64)/lib(main|SDL2)\.so|assets/funcs/(IREO|IRDO|IRBO|IRAO|CPUE|IREF|IRDF|CPUF|IRBF|IRAF)\.txt|assets/LICENSE(-mGBA)?\.txt)$')
+regional_codes = '|'.join(p['code'] for p in __import__('json').loads(__import__('pathlib').Path('tools/regions/profiles.json').read_text())['profiles'] if p['kind']=='functions')
+ok = re.compile(r'^(AndroidManifest\.xml|resources\.arsc|classes\.dex|res/.*\.png|res/mipmap-anydpi-v26/ic_launcher\.xml|lib/(arm64-v8a|x86_64)/lib(main|SDL2)\.so|assets/funcs/(?:IREO|IRDO|IRBO|IRAO|CPUE|ADAE|APAE|ADAS|IRAS|CPUS|IREF|IRDF|CPUF|IRBF|IRAF|' + regional_codes + r')\.txt|assets/LICENSE(-mGBA|-Noto)?\.txt)$')
 bad = [n for n in zipfile.ZipFile(sys.argv[1]).namelist() if not ok.match(n)]
 if bad: sys.exit('unexpected files in the APK: %s' % bad)
 PY
+python3 tools/android/check_native_alignment.py "$APK"
 if [ -x "$BT/apksigner" ]; then "$BT/apksigner" verify "$APK" && echo "signature: ok"; fi
-python3 - "$BT/aapt" "$APK" "${SSR_VERSION:-0.2.0}" "${SSR_VERSION_CODE:-20000}" <<'PY'
-import re, subprocess, sys
-badging = subprocess.check_output([sys.argv[1], 'dump', 'badging', sys.argv[2]], text=True)
-for field, expected in [('versionName', sys.argv[3]), ('versionCode', sys.argv[4])]:
-    match = re.search(field + r"='([^']*)'", badging)
-    if not match or match[1] != expected:
-        raise SystemExit('APK ' + field + ' does not match the release')
-print('APK version: ' + sys.argv[3] + ' (' + sys.argv[4] + ')')
-PY
+python3 tools/updater/write_checksums.py "$HERE/build-android-dist" --build "pokemon-ds-wide-android.apk=$HERE/build-android-dist/fulldex-build-id.txt"
 ls -l "$APK"
 say "Done: $APK"
 cat <<EOF

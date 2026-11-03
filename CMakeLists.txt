@@ -8,6 +8,15 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     endif()
 endif()
 project(ssrecomp LANGUAGES C CXX)
+# Reconfigure after source edits so the packaged binary build ID advances for hotfixes,
+# including incremental builds that do not explicitly invoke CMake first.
+file(GLOB_RECURSE SSR_BUILD_VERSION_INPUTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/frontend/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/frontend/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frontend/*.mm" "${CMAKE_CURRENT_SOURCE_DIR}/runtime/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/melonDS/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/melonDS/src/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/melonDS/src/*.S")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${SSR_BUILD_VERSION_INPUTS})
+
 set(SSR_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gen" CACHE PATH "Generated game sources")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -93,21 +102,6 @@ file(GLOB_RECURSE SSR_RCHEEVOS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/frontend/thi
 add_library(rcheevos STATIC ${SSR_RCHEEVOS_SOURCES})
 target_include_directories(rcheevos PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/frontend/thirdparty/rcheevos/include")
 
-# The menus' translations (frontend/i18n.h): every lang/*.json embedded in the program, so that
-# nothing has to be installed beside it (Android, Switch and PC alike). Written only when it
-# changes.
-file(GLOB SSR_LANG_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lang/*.json")
-set(_lang_table "")
-foreach(_lang_file ${SSR_LANG_FILES})
-    get_filename_component(_lang_code "${_lang_file}" NAME_WE)
-    file(READ "${_lang_file}" _lang_text)
-    string(APPEND _lang_table "    { \"${_lang_code}\", R\"SSRLANG(${_lang_text})SSRLANG\" },\n")
-endforeach()
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lang")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lang/ssr_lang_data.h.new" "// Made by CMakeLists.txt from lang/*.json.\n${_lang_table}")
-configure_file("${CMAKE_CURRENT_BINARY_DIR}/lang/ssr_lang_data.h.new" "${CMAKE_CURRENT_BINARY_DIR}/lang/ssr_lang_data.h" COPYONLY)
-include_directories("${CMAKE_CURRENT_BINARY_DIR}/lang")
-
 set(SSRECOMP_SOURCES
     frontend/main.cpp
     frontend/achievements.cpp
@@ -120,8 +114,8 @@ set(SSRECOMP_SOURCES
 
 # The app's version (Android: for its check for a newer release; Switch: shown in the
 # Homebrew Menu): the newest one in CHANGELOG.md.
-set(SSR_VERSION "" CACHE STRING "Application version (defaults to the changelog)")
-if((ANDROID OR SSR_SWITCH) AND NOT SSR_VERSION)
+set(SSR_VERSION "")
+if(ANDROID OR SSR_SWITCH)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS CHANGELOG.md)
         file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md" SSR_RELEASES REGEX "^## v[0-9]")
@@ -132,8 +126,6 @@ if((ANDROID OR SSR_SWITCH) AND NOT SSR_VERSION)
     endif()
 endif()
 
-set(SSR_UPDATE_REPOSITORY "ClickingMaster/ssrecomp" CACHE STRING "GitHub repository used for Android update checks")
-
 if(ANDROID)
     # On Android the game is the library libmain.so that SDL's Java activity loads
     # (tools/android/apk.py packs it into an APK). SDL2 is one built for Android
@@ -141,7 +133,7 @@ if(ANDROID)
     add_library(ssrecomp SHARED ${SSRECOMP_SOURCES})
     set_target_properties(ssrecomp PROPERTIES OUTPUT_NAME main)
     target_include_directories(ssrecomp PRIVATE melonDS/src frontend runtime "${SSR_GENERATED_DIR}")
-    target_compile_definitions(ssrecomp PRIVATE SSR_NO_PNG SSR_VERSION="${SSR_VERSION}" SSR_UPDATE_REPOSITORY="${SSR_UPDATE_REPOSITORY}")
+    target_compile_definitions(ssrecomp PRIVATE SSR_NO_PNG SSR_VERSION="${SSR_VERSION}")
     target_link_libraries(ssrecomp PRIVATE core SDL2::SDL2 android log)
     # The all-games app (tools/android/build_all.sh): no game inside, the game list from the
     # PC program (frontend/pc_launcher.cpp) with the ROMs in a folder the player chooses.
@@ -268,6 +260,14 @@ elseif(SSR_SWITCH)
         target_compile_definitions(ssrecomp PRIVATE SSR_ALL_GAMES)
         # Its HOME MENU ICONS (the settings page of its list).
         target_sources(ssrecomp PRIVATE frontend/switch_forwarder.cpp)
+        # Updates from its list, as on a PC (frontend/updater.cpp; zlib reads the download's zip).
+        string(TIMESTAMP SSR_BUILT_AT "%s" UTC)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fulldex-build-id.txt" "${SSR_BUILT_AT}\n")
+        target_sources(ssrecomp PRIVATE frontend/updater.cpp)
+        set_source_files_properties(frontend/updater.cpp PROPERTIES COMPILE_DEFINITIONS "SSR_BUILT_AT=${SSR_BUILT_AT}")
+        target_compile_definitions(ssrecomp PRIVATE SSR_UPDATER)
+        find_package(ZLIB REQUIRED)
+        target_link_libraries(ssrecomp PRIVATE ZLIB::ZLIB)
     endif()
     add_custom_target(ssrecomp_nro ALL
         COMMAND "${CMAKE_COMMAND}"
@@ -312,6 +312,14 @@ else()
     if(SSR_PC_ALL_GAMES)
         target_sources(ssrecomp PRIVATE frontend/pc_launcher.cpp)
         target_compile_definitions(ssrecomp PRIVATE SSR_PC_LAUNCHER)
+        # Updates from the game list (frontend/updater.cpp). The time of building tells a
+        # download with no record of what was installed from a newer release (only this one file
+        # is compiled again when it changes).
+        string(TIMESTAMP SSR_BUILT_AT "%s" UTC)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fulldex-build-id.txt" "${SSR_BUILT_AT}\n")
+        target_sources(ssrecomp PRIVATE frontend/updater.cpp)
+        set_source_files_properties(frontend/updater.cpp PROPERTIES COMPILE_DEFINITIONS "SSR_BUILT_AT=${SSR_BUILT_AT}")
+        target_compile_definitions(ssrecomp PRIVATE SSR_UPDATER)
     endif()
     if(UNIX AND NOT APPLE AND SSR_PC_ALL_GAMES)
         # The Linux download carries its own SDL2 beside the program (tools/pc/build_all.sh),
@@ -379,13 +387,26 @@ endif()
 set(SSR_GBA_DIR "" CACHE PATH "Pokemon GBA Widescreen's folder, to play GBA games too")
 if(SSR_GBA_DIR AND (SSR_PC_ALL_GAMES OR SSR_ALL_GAMES))
     set(GBAW_EMBEDDED ON CACHE BOOL "" FORCE)
-    add_subdirectory("${SSR_GBA_DIR}" gbaw EXCLUDE_FROM_ALL)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(SSR_GBA_UI_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/gba-localised")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/localisation/prepare_gba.py"
+        "${SSR_GBA_DIR}" "${SSR_GBA_UI_SOURCE}" RESULT_VARIABLE SSR_GBA_UI_RESULT)
+    if(NOT SSR_GBA_UI_RESULT EQUAL 0)
+        message(FATAL_ERROR "Could not prepare the localised GBA interface")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/localisation/prepare_gba.py" "${CMAKE_CURRENT_SOURCE_DIR}/frontend/touchlayout.h" "${SSR_GBA_DIR}/frontend/ui.h" "${SSR_GBA_DIR}/frontend/main.cpp")
+    add_subdirectory("${SSR_GBA_UI_SOURCE}" gbaw EXCLUDE_FROM_ALL)
+    target_include_directories(gbawide PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/frontend")
     target_link_libraries(ssrecomp PRIVATE gbawide)
     target_compile_definitions(ssrecomp PRIVATE SSR_GBA)
 endif()
 # RetroAchievements: the library, and each platform's way to the internet (achievements_http.cpp);
 # the program's version, which the server is told with its name, from CHANGELOG.md's newest release.
 target_link_libraries(ssrecomp PRIVATE rcheevos)
+if(ANDROID)
+    target_link_options(ssrecomp PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")
+endif()
 if(WIN32)
     target_link_libraries(ssrecomp PRIVATE winhttp)
 elseif(APPLE)
@@ -393,6 +414,12 @@ elseif(APPLE)
     target_sources(ssrecomp PRIVATE frontend/achievements_http_apple.mm)
     set_source_files_properties(frontend/achievements_http_apple.mm PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
     target_link_libraries(ssrecomp PRIVATE "-framework Foundation")
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # The list upright, a game sideways (frontend/ios_orient.mm). UIKit is iOS only.
+        target_sources(ssrecomp PRIVATE frontend/ios_orient.mm)
+        set_source_files_properties(frontend/ios_orient.mm PROPERTIES LANGUAGE CXX COMPILE_FLAGS "-x objective-c++")
+        target_link_libraries(ssrecomp PRIVATE "-framework UIKit")
+    endif()
 elseif(SSR_SWITCH)
     # (devkitPro's libcurl, with its TLS library, from the portlibs.)
     find_package(PkgConfig REQUIRED)
