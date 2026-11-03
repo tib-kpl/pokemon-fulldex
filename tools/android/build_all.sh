@@ -212,7 +212,10 @@ cat > "$W/res/mipmap-anydpi-v26/ic_launcher.xml" <<'XML'
 </adaptive-icon>
 XML
 "$BT/aapt2" compile --dir "$W/res" -o "$W/res.zip"
+# SSR_VERSION and SSR_VERSION_CODE (the fork's CI: the release's number) replace the manifest's, so
+# that an update tracker sees the installed app as the release it came from.
 "$BT/aapt2" link -o "$W/base.apk" -I "$JAR" --manifest tools/android/allgames/AndroidManifest.xml \
+    --replace-version --version-name "${SSR_VERSION:-0.1.0}" --version-code "${SSR_VERSION_CODE:-1}" \
     --min-sdk-version 24 --target-sdk-version 34 "$W/res.zip"
 javac -nowarn --release 11 -cp "$JAR" -d "$W/classes" \
     "$W/BuildInfo.java" $(find "$DEPS/$SDL_NAME/android-project/app/src/main/java" tools/android/allgames/java -name '*.java') 2>&1
