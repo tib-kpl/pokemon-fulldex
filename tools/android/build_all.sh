@@ -51,11 +51,14 @@ PLATFORM=android-24   # Android 7.0 and later
 say() { printf '\n== %s\n' "$*"; }
 fail() { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
-[ -n "$ROM" ] || fail "give your SoulSilver ROM (US): tools/android/build_all.sh your-soulsilver-us.nds"
-[ -f "$ROM" ] || fail "no such file: $ROM"
-[ "$(dd if="$ROM" bs=1 skip=12 count=4 2>/dev/null)" = IPGE ] ||
-    fail "$ROM is not Pokemon SoulSilver (US, game code IPGE): the tables are made from it"
-ROM="$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")"
+# Without a ROM (the fork's CI, which never has one) the tables are made from the layout, which
+# holds addresses only (tools/soulsilver/layout_tables.py).
+if [ -n "$ROM" ]; then
+    [ -f "$ROM" ] || fail "no such file: $ROM"
+    [ "$(dd if="$ROM" bs=1 skip=12 count=4 2>/dev/null)" = IPGE ] ||
+        fail "$ROM is not Pokemon SoulSilver (US, game code IPGE): the tables are made from it"
+    ROM="$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")"
+fi
 for tool in git cmake ninja python3 curl zip javac; do
     command -v "$tool" >/dev/null || fail "$tool is not installed (Ubuntu: sudo apt install git cmake ninja-build python3 curl zip openjdk-17-jdk-headless)"
 done
@@ -82,12 +85,17 @@ fetch_symbols() { # dir url commit paths...
 
 # SoulSilver and HeartGold's tables (addresses only) and the function tables, as for the PC
 # download (tools/pc/build_all.sh).
-if [ ! -f gen/sources.cmake ]; then
-    say "SoulSilver's tables, from $ROM"
-    python3 tools/recomp.py --rom "$ROM" --layout layouts/soulsilver-us.json melonDS/src gen
-    python3 tools/apps.py --layout layouts/soulsilver-us.json gen
+if [ -z "$ROM" ]; then
+    python3 tools/soulsilver/layout_tables.py layouts/soulsilver-us.json build-layout-tables
+    python3 tools/soulsilver/tables_only.py build-layout-tables build-gen-tables
+else
+    if [ ! -f gen/sources.cmake ]; then
+        say "SoulSilver's tables, from $ROM"
+        python3 tools/recomp.py --rom "$ROM" --layout layouts/soulsilver-us.json melonDS/src gen
+        python3 tools/apps.py --layout layouts/soulsilver-us.json gen
+    fi
+    python3 tools/soulsilver/tables_only.py gen build-gen-tables
 fi
-python3 tools/soulsilver/tables_only.py gen build-gen-tables
 FUNCS="$HERE/build-android-data/funcs"
 rm -rf "$FUNCS"
 mkdir -p "$FUNCS"
